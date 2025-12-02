@@ -13,8 +13,8 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import stripe
 
-from .in_memory_db import InMemoryDB
-from .mock_data import PROPERTIES_DATA, PLAN_SEEDS
+from in_memory_db import InMemoryDB
+from mock_data import PROPERTIES_DATA, PLAN_SEEDS
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')

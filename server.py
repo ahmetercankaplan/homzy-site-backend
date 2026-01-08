@@ -26,6 +26,7 @@ USE_IN_MEMORY_DB = os.getenv('USE_IN_MEMORY_DB', 'true').lower() == 'true'
 ENABLE_DEV_AUTH = os.getenv('ENABLE_DEV_AUTH', 'false').lower() == 'true'
 COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
 COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
+ENABLE_PAYMENTS = os.getenv('ENABLE_PAYMENTS', 'false').lower() == 'true'
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
 PADDLE_VENDOR_ID = os.getenv('PADDLE_VENDOR_ID')
@@ -396,6 +397,8 @@ async def list_plans():
 async def subscribe_plan(plan_slug: str, user: Optional[User] = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ENABLE_PAYMENTS:
+        raise HTTPException(status_code=503, detail="Payments are disabled")
     plan = await get_plan_by_slug(plan_slug)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -696,6 +699,8 @@ async def create_viewing_request(data: ViewingRequestCreate, user: Optional[User
 async def create_checkout_session(payload: dict, user: Optional[User] = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ENABLE_PAYMENTS:
+        raise HTTPException(status_code=503, detail="Payments are disabled")
     purpose = payload.get("purpose")
     plan_slug = payload.get("plan_slug")
     listing_id = payload.get("listing_id")
@@ -761,6 +766,8 @@ async def create_checkout_session(payload: dict, user: Optional[User] = Depends(
 
 @api_router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
+    if not ENABLE_PAYMENTS:
+        return {"status": "disabled"}
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
     endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
@@ -801,6 +808,8 @@ async def run_expiry():
 async def paddle_checkout_session(payload: dict, user: Optional[User] = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ENABLE_PAYMENTS:
+        raise HTTPException(status_code=503, detail="Payments are disabled")
     purpose = payload.get("purpose")
     plan_slug = payload.get("plan_slug")
     listing_id = payload.get("listing_id")

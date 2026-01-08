@@ -141,6 +141,7 @@ def generate_seed_properties(count: int = 50) -> List[Dict[str, Any]]:
                 "parking": idx % 4 != 1,
                 "balcony_garden": idx % 2 == 0,
                 "energy_rating": energy,
+                "student_friendly": idx % 3 == 0,
                 "availability_date": availability_date,
                 "photos": photos,
                 "photos_count": len(photos),

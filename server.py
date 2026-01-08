@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
 import stripe
+from passlib.hash import bcrypt
 
 from in_memory_db import InMemoryDB
 from mock_data import PROPERTIES_DATA, PLAN_SEEDS
@@ -22,7 +23,9 @@ load_dotenv(ROOT_DIR / '.env')
 MONGO_URL = os.getenv('MONGO_URL')
 DB_NAME = os.getenv('DB_NAME', 'homzy')
 USE_IN_MEMORY_DB = os.getenv('USE_IN_MEMORY_DB', 'true').lower() == 'true'
-ENABLE_DEV_AUTH = os.getenv('ENABLE_DEV_AUTH', 'true').lower() == 'true'
+ENABLE_DEV_AUTH = os.getenv('ENABLE_DEV_AUTH', 'false').lower() == 'true'
+COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
+COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
 PADDLE_VENDOR_ID = os.getenv('PADDLE_VENDOR_ID')
@@ -63,6 +66,7 @@ class User(BaseModel):
     role: str = "individual"
     plan_id: str = "plan-free"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    password_hash: Optional[str] = None
 
 class Session(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -98,6 +102,7 @@ class Property(BaseModel):
     country: str
     city: str
     featured: bool = False
+    student_friendly: bool = False
     status: str = "active"
     photos_count: int = 0
     expires_at: Optional[datetime] = None
@@ -151,6 +156,7 @@ class PropertyCreate(BaseModel):
     postcode: Optional[str] = None
     floorplan: Optional[str] = None
     status: Optional[str] = "active"
+    student_friendly: Optional[bool] = False
 
 class PropertyUpdate(BaseModel):
     title: Optional[str] = None
@@ -177,6 +183,7 @@ class PropertyUpdate(BaseModel):
     postcode: Optional[str] = None
     floorplan: Optional[str] = None
     status: Optional[str] = None
+    student_friendly: Optional[bool] = None
 
 class ViewingRequestCreate(BaseModel):
     property_id: str
@@ -190,6 +197,15 @@ class DevLogin(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
+
+class RegisterPayload(BaseModel):
+    email: str
+    name: str
+    password: str
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
 
 class Plan(BaseModel):
     id: str
@@ -257,6 +273,43 @@ def is_active(until: Optional[str]) -> bool:
     dt = until if isinstance(until, datetime) else datetime.fromisoformat(until)
     return dt > datetime.now(timezone.utc)
 
+def user_public(user: User) -> dict:
+    data = user.model_dump()
+    data.pop("password_hash", None)
+    return data
+
+async def create_session_for_user(user: User, response: Response, token: Optional[str] = None) -> str:
+    session_token = token or str(uuid.uuid4())
+    session = Session(
+        user_id=user.id,
+        session_token=session_token,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7)
+    )
+    session_dict = session.model_dump()
+    session_dict["created_at"] = session_dict["created_at"].isoformat()
+    session_dict["expires_at"] = session_dict["expires_at"].isoformat()
+    await db.sessions.insert_one(session_dict)
+
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+        max_age=604800,
+        path="/"
+    )
+    return session_token
+
+def hash_password(raw: str) -> str:
+    return bcrypt.hash(raw)
+
+def verify_password(raw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.verify(raw, hashed)
+    except Exception:
+        return False
+
 # Auth endpoints
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
@@ -264,14 +317,14 @@ async def create_session(request: Request, response: Response):
     if not session_id:
         raise HTTPException(status_code=400, detail="Session ID required")
     
+    auth_session_url = os.getenv("AUTH_SESSION_URL")
+    if not auth_session_url:
+        raise HTTPException(status_code=501, detail="AUTH_SESSION_URL not configured")
+
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}
-        )
+        resp = await client.get(auth_session_url, headers={"X-Session-ID": session_id})
         if resp.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid session")
-        
         data = resp.json()
     
     existing_user = await db.users.find_one({"email": data["email"]}, {"_id": 0})
@@ -287,28 +340,31 @@ async def create_session(request: Request, response: Response):
     else:
         user = User(**existing_user)
     
-    session_token = data["session_token"]
-    session = Session(
-        user_id=user.id,
-        session_token=session_token,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7)
-    )
-    session_dict = session.model_dump()
-    session_dict["created_at"] = session_dict["created_at"].isoformat()
-    session_dict["expires_at"] = session_dict["expires_at"].isoformat()
-    await db.sessions.insert_one(session_dict)
-    
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=604800,
-        path="/"
-    )
-    
-    return {"user": user.model_dump()}
+    session_token = data.get("session_token") or str(uuid.uuid4())
+    await create_session_for_user(user, response, token=session_token)
+    return {"user": user_public(user), "session_token": session_token}
+
+@api_router.post("/auth/register")
+async def register(payload: RegisterPayload, response: Response):
+    existing = await db.users.find_one({"email": payload.email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = User(email=payload.email, name=payload.name)
+    user_dict = user.model_dump()
+    user_dict["password_hash"] = hash_password(payload.password)
+    user_dict["created_at"] = user_dict["created_at"].isoformat()
+    await db.users.insert_one(user_dict)
+    await create_session_for_user(user, response)
+    return {"user": user_public(user)}
+
+@api_router.post("/auth/login")
+async def login(payload: LoginPayload, response: Response):
+    user_doc = await db.users.find_one({"email": payload.email}, {"_id": 0})
+    if not user_doc or not user_doc.get("password_hash") or not verify_password(payload.password, user_doc["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    user = User(**user_doc)
+    await create_session_for_user(user, response)
+    return {"user": user_public(user)}
 
 @api_router.post("/auth/dev-login")
 async def dev_login(payload: DevLogin, response: Response):
@@ -328,28 +384,8 @@ async def dev_login(payload: DevLogin, response: Response):
     else:
         user = User(**existing_user)
 
-    session_token = str(uuid.uuid4())
-    session = Session(
-        user_id=user.id,
-        session_token=session_token,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7)
-    )
-    session_dict = session.model_dump()
-    session_dict["created_at"] = session_dict["created_at"].isoformat()
-    session_dict["expires_at"] = session_dict["expires_at"].isoformat()
-    await db.sessions.insert_one(session_dict)
-
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=604800,
-        path="/"
-    )
-
-    return {"user": user.model_dump(), "session_token": session_token, "source": DATA_SOURCE}
+    session_token = await create_session_for_user(user, response)
+    return {"user": user_public(user), "session_token": session_token, "source": DATA_SOURCE}
 
 @api_router.get("/plans", response_model=List[Plan])
 async def list_plans():
@@ -383,7 +419,7 @@ async def get_usage(user: Optional[User] = Depends(get_current_user)):
 async def get_me(user: Optional[User] = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"user": user.model_dump()}
+    return {"user": user_public(user)}
 
 @api_router.post("/auth/logout")
 async def logout(response: Response, user: Optional[User] = Depends(get_current_user), session_token: Optional[str] = Cookie(None)):
@@ -408,6 +444,7 @@ async def get_properties(
     country: Optional[str] = None,
     energy_rating: Optional[str] = None,
     featured: Optional[bool] = None,
+    student_friendly: Optional[bool] = None,
     limit: int = 50
 ):
     # Force filter to only allowed countries
@@ -444,6 +481,8 @@ async def get_properties(
         query["energy_rating"] = energy_rating
     if featured is not None:
         query["featured"] = featured
+    if student_friendly is not None:
+        query["student_friendly"] = student_friendly
     # Only active listings
     query["status"] = "active"
 

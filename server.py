@@ -22,7 +22,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 MONGO_URL = os.getenv('MONGO_URL')
 DB_NAME = os.getenv('DB_NAME', 'homzy')
-USE_IN_MEMORY_DB = os.getenv('USE_IN_MEMORY_DB', 'true').lower() == 'true'
+USE_IN_MEMORY_DB = os.getenv('USE_IN_MEMORY_DB', 'false').lower() == 'true'
 ENABLE_DEV_AUTH = os.getenv('ENABLE_DEV_AUTH', 'false').lower() == 'true'
 COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'true').lower() == 'true'
 COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"

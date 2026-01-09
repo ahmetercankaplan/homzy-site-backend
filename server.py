@@ -32,6 +32,10 @@ STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
 PADDLE_VENDOR_ID = os.getenv('PADDLE_VENDOR_ID')
 PADDLE_API_KEY = os.getenv('PADDLE_API_KEY')
 PADDLE_PUBLIC_KEY = os.getenv('PADDLE_PUBLIC_KEY')
+CORS_ORIGINS = [
+    origin.strip() for origin in (os.getenv('CORS_ORIGINS') or "http://localhost:3000,http://127.0.0.1:3000,https://homzy.site,https://www.homzy.site").split(",")
+    if origin.strip()
+]
 
 client = None
 if not USE_IN_MEMORY_DB and MONGO_URL:
@@ -849,7 +853,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

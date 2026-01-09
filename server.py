@@ -24,7 +24,7 @@ MONGO_URL = os.getenv('MONGO_URL')
 DB_NAME = os.getenv('DB_NAME', 'homzy')
 USE_IN_MEMORY_DB = os.getenv('USE_IN_MEMORY_DB', 'true').lower() == 'true'
 ENABLE_DEV_AUTH = os.getenv('ENABLE_DEV_AUTH', 'false').lower() == 'true'
-COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
+COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'true').lower() == 'true'
 COOKIE_SAMESITE = "none" if COOKIE_SECURE else "lax"
 ENABLE_PAYMENTS = os.getenv('ENABLE_PAYMENTS', 'false').lower() == 'true'
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
